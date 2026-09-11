@@ -45,6 +45,21 @@ OpenAPI 创建 fn=scenario-dialogue-video
 
 ---
 
+### 1.1 参数场景路由（四场景）
+
+按创建请求参数组合路由（asset = 独立上传素材；kit = 用户 kit 声明；scene_script = 用户直传分镜）：
+
+| # | 参数组合 | kit 来源 | script 来源 | AI 调用 | 新增逻辑 | 结论 |
+| - | ------ | ------ | ------ | ------ | ------ | ------ |
+| 1 | asset + script | AI（现状） | AI | 1（plan-video） | 无 | ✅ 现状；kit 图是 AI 参考重生成，非 asset 本体（预期管理） |
+| 2 | script + scene_script（±asset） | AI | 用户（renormalize 重排） | 2 | 无（纯复用通道） | ✅ AI kit 源自同一剧本，name 对齐质量天然高；voice 仅自动分配 |
+| 3 | kit + scene_script（asset 忽略） | 用户 | 用户（覆盖 + renormalize） | 2 | 声明应用（建 kit+voice） | ✅ 确定性最高；可选 script_locked 退化本地直落 |
+| 4 | kit + AI script + 用户 script | 用户 | 合并（覆盖式：用户 scene 按 sorting 占位覆盖，AI 补全） | 2 | 声明应用 + 合并规则 | ⚠️ 可行，合并语义待产品确认，可后置 |
+
+路由判定（创建时）：`kit 声明?` → 3/4 vs 1/2；`scene_script?` + 覆盖语义 → 2 vs 3 vs 4。场景 2/3/4 的 characters 区分强弱引用（见 §3.1）；`scene_script` 非空时**豁免「idea/script/doc/webpage 至少其一」校验**。asset 与 kit 声明并存时：asset 仍作为素材进 plan-video（AI 可作环境/风格参考），kit 本体只认声明。
+
+---
+
 ## 2. 档位 1：AI 生成 kit（现状档）
 
 | 项 | 说明 |
@@ -90,7 +105,23 @@ scene_script ──(匹配A: 角色→kit)──> kit ──(匹配B: voice)─�
 ⑤ scene_script_status → NORMAL，闸门放行，create-video 现状不变
 ```
 
-### 3.3 校验与兜底规则
+### 3.3 renormalize 请求 payload 清单（代码核实：`assembleRenormalizeScriptReqExtraBo`）
+
+网关消息 `AIGC_RENORMALIZE_VIDEO_SCRIPT`；通用头（entityId/entityType/trackingId/userId/feePlan/msgType）外，业务载荷整体序列化为 S3 jsonFile，内容：
+
+| payload 字段 | 组装来源 | 内容与要点 |
+| ------ | ------ | ------ |
+| `target_video_desc` | `aiAssetService.getTargetVideoDesc(agentProject)` | 用户目标视频描述（idea/剧本素材） |
+| `extract_param`（AiAgentAttributeBo） | `getAiAgentAttributeBo(attributes, aigc)` | 项目属性全集：contentGuide / videoDurationInSeconds(+Hard) / aspectRatio / videoPace / videoType / audioLanguage(+Region) / textOverlayLanguage / emoji / userDefinedVisualizations / compositionMode / voiceOption / recommendKenBurns / speakerNotesVerbatim / styleFamily / targetAudience / videoPurpose / avatarModelPolicy |
+| `plan_video`（PlanVideoVo，edited script） | `assembleNormalizedVideoScript`：**从 DB scene scripts 组装**（按 sorting） | title/summary（groupScript 或项目名/描述）；scenes[] = `toPlanVideoScriptVo`：scene_index、duration、coverage_shot_id / environment_kit_id/index（`ref_image_kit_id` → kit detail `ai_kit_id` 翻译，COVERAGE 型 → coverage_shot_id）、visual、speaker_kit_id/index、audio_script、scene_text |
+| `kits`（KitsBo[]） | `queryKitsByAgentProjectId` | index、kitId（语义 id）、type、metadata、role、name、visualAppearance、creativeNotes、voiceProfile、kitSource、stillPrompt、style、speechCapability、gender、**voiceId**、visualReference —— kit 全量属性含 voice |
+| `spatial_units`（SpatialCoverageUnitBo[]） | `querySpatialUnitsByAgentProjectId` | spatialUnitId、environmentKitIndex、cameraAxisRule、actorSlots、masterCoverageShot |
+
+**对 OpenAPI 方案的两条直接推论**：
+1. renormalize 的**全部输入都从 DB 组装**（scene scripts / kits / spatial / attributes），没有直接透传请求体的字段 → OpenAPI 走该通道 = 「用户数据先落库（声明建 kit、scene_script 写入），再触发 renormalize」，方案与通道天然契合，无需改 AI 协议。
+2. 我方重建 kit 时只要落好 `ai_kit_id`，出向的 kit 语义 id 翻译（`resolveKitDetail`）自动工作；kit 的 name / visualAppearance / 图（kitSource）/ voiceId 随 payload 全量给 AI，具备按声明对齐的信息基础。
+
+### 3.4 校验与兜底规则
 
 | 规则 | 行为 |
 | ---- | ---- |
@@ -101,7 +132,7 @@ scene_script ──(匹配A: 角色→kit)──> kit ──(匹配B: voice)─�
 | 用户未声明的剧本角色 | AI 动态生成 + 自动 voice（退化为档位1行为） |
 | createVideos 出向 | scene script → 反查 `ai_kit_id`（我方分配的语义 id）→ 语义 id 出向，链路自洽 |
 
-### 3.4 scene_script 用户入参与字段填充矩阵（DB 全字段 × 数据来源）
+### 3.5 scene_script 用户入参与字段填充矩阵（DB 全字段 × 数据来源）
 
 用户入参无法也不需要覆盖表全部字段。入参模型（每条 scene）：
 
@@ -127,7 +158,7 @@ DB 全字段来源矩阵（落库实现在 vcjs `buildSceneScript`，哨兵规�
 
 **用户字段与 AI 回填的关系**（关键）：走 renormalize 的分支（2a/3/4-ai_align）不存在「用户字段 + AI 字段合并」——用户 scene_script 是 renormalize 的**输入**，落库的是 AI 返回的**整条重排结果**（text 可能被微调、ref_image_kit_id 会被 spatial 锚定改写）。要逐字保留走 `script_locked` 本地直落：用户字段直接落库、AI 不回填，duration/visual 留空由生成端自定。分支 2a 的 characters 是**弱引用**（自由角色名，AI 在 renormalize 时对齐到 AI kit），不做创建时校验。
 
-### 3.5 风险
+### 3.6 风险
 
 | 风险 | 缓解 |
 | ---- | ---- |
