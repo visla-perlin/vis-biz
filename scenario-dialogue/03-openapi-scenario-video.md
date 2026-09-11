@@ -195,6 +195,25 @@ DB 全字段来源矩阵（落库实现在 vcjs `buildSceneScript`，哨兵规�
 
 ---
 
+### 3.7 两轮流程可行性结论（用户 kit + scene_script 能否全部补齐）
+
+**结论：满足。** 第一轮 plan-video（AI 全量生成）→ 第二轮删换用户数据 + renormalize，所有数据项均有来源、链路不断：
+
+| 数据项 | 两轮后来源 | 状态 |
+| ------ | ------ | ------ |
+| kit 图 / voiceId | 用户数据（原地换绑） | ✅ |
+| kit 的 index / ai_kit_id / gender / speechCapability / visualAppearance | 原地换绑**保留 AI 第一轮产物**（删重建会全丢且 spatial 引用断链） | ✅ |
+| scene script 业务字段 | 用户数据，AI 重排后落库 | ✅ |
+| visual（运镜） | **renormalize AI 补齐**（第二轮核心价值） | ✅ |
+| spatial_units / coverage 结构引用 | 第一轮产物保留，原地换绑保证 kit_index 引用不断 | ✅ |
+| visible_kit_indexes | 系统组装 | ✅ |
+
+顺序细节：先声明应用（换绑 kit）→ 再写用户 scenes（speaker 解析依赖 kit 主键就位）→ 再 renormalize。
+
+质量级注意点（非数据缺失）：① coverage 图是第一轮基于 AI 版环境生成的，与用户环境图视觉不一致 → 可调 update-coverage-images（Web 已有）重生成；② visualAppearance 是 AI 版形象的文字描述，换图后有语义漂移 → 可选补视觉分析刷新。
+
+**矛盾必须明示**：第二轮 renormalize 正是补齐机制本身（补 visual、锚 coverage）。若要求逐字保留剧本（script_locked 跳过 renormalize），visual 无人补（留空生成端自定）——「逐字保留」与「AI 补齐运镜」二选一（待确认点 #2 的实质）。
+
 ## 4. 待确认决策点
 
 | # | 决策点 | 倾向 |
