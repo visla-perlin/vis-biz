@@ -158,6 +158,8 @@ Scenario Dialogue **不是独立 pipeline**，而是挂接在现有 project gene
 
 OpenAPI 侧详细设计：[`IdeaProjects/API-1286/02-openapi-support-plan.md`](../../API-1286/02-openapi-support-plan.md)
 
+后续演进（声明式 character/voice 绑定、脚本编辑窗口、直传剧本）：[`03-openapi-scene-asset-voice-adaptation.md`](./03-openapi-scene-asset-voice-adaptation.md)（方案设计，未实施）
+
 ## 8. 子 issue 地图（AI-1365）
 
 | Issue | 内容 |
