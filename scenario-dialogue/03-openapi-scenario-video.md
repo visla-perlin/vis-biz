@@ -120,9 +120,10 @@ scene_script ──(匹配A: 角色→kit)──> kit ──(匹配B: voice)─�
 ② plan-video 照常执行（计费；AI 产 kits + script + spatial，落库）
 ③ 声明应用（vcjs plan 回调后，新增步骤）：
    对每条声明：
-     - AI 已规划同名 kit → 替换：kit.mediaId 换绑用户 media（buildRef + 资产标准化链）
-                           + detail.voiceId = 声明 voice + 我方分配 ai_kit_id（语义 id）
-     - AI 未规划         → 补建 kit（add-uploaded-kit 落库语义，sourceType=USER）
+     - AI 已规划同名 kit → 【原地换绑】保留 kit 主键 + kit_index + ai_kit_id
+                           + visualAppearance/gender，仅替换 mediaId（用户图，buildRef + 资产标准化链）
+                           + voiceId（声明值）—— 保证 spatial/scene script/出向翻译引用不断链
+     - AI 未规划         → 补建 kit（add-uploaded-kit 落库语义，sourceType=USER，新分配 index/ai_kit_id）
    AI 规划的额外角色（用户未声明）→ 保留，voice 走自动分配
 ④ 分支 2a：renormalize（重建 kits[] + 剧本素材 → AI 重排 → scene scripts 硬删重建）
    分支 2b：scene_scripts 本地直落（复用 initAgentProjectSceneScript 映射，"-1"=voiceover）
@@ -214,10 +215,29 @@ DB 全字段来源矩阵（落库实现在 vcjs `buildSceneScript`，哨兵规�
 
 **矛盾必须明示**：第二轮 renormalize 正是补齐机制本身（补 visual、锚 coverage）。若要求逐字保留剧本（script_locked 跳过 renormalize），visual 无人补（留空生成端自定）——「逐字保留」与「AI 补齐运镜」二选一（待确认点 #2 的实质）。
 
-## 4. 待确认决策点
+## 4. 重要问题（待拍板）
 
-| # | 决策点 | 倾向 |
-| - | ------ | ---- |
-| 1 | 2a/2b 中 renormalize 是第二次 AI 调用（成本）：随 plan-video 打包计费 vs 独立计费点 | 打包计费（用户视角一次创建） |
-| 2 | 2b 默认 script_locked（逐字保留）还是 ai_align（允许微调） | script_locked 默认，ai_align 显式开启 |
-| 3 | 2b-i + `spatial_mode=none` 跳过 plan-video：AI 侧空 spatial 的 createVideos 兼容性 | 与 AI 团队确认后开放 |
+已确定（不再讨论）：两档方案、四场景路由、两轮流程（plan-video → 原地换绑 → renormalize）、原地换绑语义、scene_script 字段矩阵与哨兵规则、强弱引用机制、renormalize 全 DB 组装适配。
+
+### 4.1 产品拍板
+
+| # | 问题 | 影响 | 倾向 |
+| - | ------ | ------ | ------ |
+| P1 | **script_locked vs ai_align**：逐字保留剧本（跳过 renormalize，visual 无人补、coverage 不锚定）vs 允许 AI 重排（全补齐但 text 可能微调）——二选一 | 2b 默认行为；用户核心体验 | script_locked 默认 + ai_align 显式开启；或按用户是否有 visual 入参自动分流 |
+| P2 | **renormalize 二次 AI 调用计费**：随 plan-video 打包 vs 独立计费点 | 档位 2 全部场景的成本与定价 | 打包（用户视角一次创建） |
+| P3 | **场景 4 保留与否**：用户 scene + AI scene 覆盖式合并（用户 scene 按 sorting 占位，AI 补全）是否真实存在需求 | 场景 4 整体去留 | 需求真实再 做，一期可砍 |
+| P4 | **coverage 图重生成**：用户环境图与 AI coverage 图视觉不一致时，是否默认触发 update-coverage-images（额外成本） | 场景 3/4 的空间一致性质量 | 默认不触发，暴露开关 |
+| P5 | **创建后切换 function_type** 的 OpenAPI 端点是否开放 | 后置增量能力 | 后置，创建时指定为主路径 |
+
+### 4.2 AI 团队确认
+
+| # | 问题 | 影响 |
+| - | ------ | ------ |
+| A1 | **空 spatial 的 createVideos 兼容性**：`spatial_mode=none` 跳过 plan-video 的纯直传模式是否可接受 | 省一次 AI 调用的极简路径能否开放 |
+| A2 | **2a 弱引用 name 匹配质量**：renormalize 按角色名+形象对齐 kit 的效果 SLA（联调验证） | 场景 2/3 中 AI 辅助匹配的可信度 |
+
+### 4.3 我方架构决策
+
+| # | 问题 | 倾向 |
+| - | ------ | ------ |
+| C1 | **声明持久化载体**：`agent_project_attributes` JSON（复用现有 JSON 列模式，无 migration）vs 新表 `agent_project_kit_binding`（结构清晰，但双仓 Entity/Mapper + visla-api Flyway） | 一期 attributes JSON（改动最小），量级上来再拆表 |
