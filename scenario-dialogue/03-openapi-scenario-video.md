@@ -60,6 +60,30 @@ OpenAPI 创建 fn=scenario-dialogue-video
 
 ---
 
+### 1.2 function_type 切换动作（change-type）与 OpenAPI 支持边界
+
+Web 切换到 scenario 的动作链（`PUT /v3/agent-project/{uuid}/change-project-type`，代码核实）：
+
+```text
+① 前置：aiAnalysisStatus=NORMAL、processStep 非 editing、ACL、credit 校验
+② changeProjectType → 触发 CHANGE_PROJECT_TYPE 阶段（AI 重新 extract 参数）
+③ vcjs extract 回调（handleAiCreatorExtractParameterResult）：
+   storyBoardEnable（09-02 会议确定：change type 后都需要执行 plan-video）
+   ├─ 非 fetch：aigcPlanVideo(functionName) → plan 回调落 kits（deleteByAgentProjectId 重建）
+   │            + scene scripts（硬删重建）+ spatial → updateToProjectType(scenario)
+   └─ fetch pipeline（OpenAPI 项目）：跳过 plan（fetch 在 create-video 前补发），仅 updateToPrepare
+```
+
+**OpenAPI 支持边界**：创建时指定 fn 已支持（一期直连 GET_PARAMETER 不走 detect）；**创建后切换 function_type 技术上可支持**——全链路已有，OpenAPI 只需新增端点 + 参数校验（scenario 要求 aigc 开启 + 素材满足），fetch 侧跳过/补发逻辑已就绪。切换的副作用是安全的：旧 scene scripts / kits 被 plan 回调硬删重建。建议作为后置增量能力（OpenAPI 主流程是创建时指定）。
+
+**用户入参没有 index 的关联机制（关键）**：`kit_index` / `ai_kit_id` 是内部关联键，用户永远不需要传。两个来源：AI plan 的 kit（AI 分配 index + ai_kit_id）；声明应用的 kit（我方分配）。用户的关联键是 **name**：
+
+- 场景 3/4 强引用：`scene_scripts[].characters: ["Alice"]` → 我方按声明 name 解析为 kit 主键（`speaker_id`）
+- 场景 2 弱引用：自由角色名 → AI renormalize 按 name 绑定 AI kit（返回 AI 自己的 speaker_kit_id）→ 落库映射
+- **声明应用优先「原地换绑」**：匹配到 AI kit 时不删重建，保留 kit 主键 + kit_index + ai_kit_id，仅替换 mediaId / voiceId —— scene script 的 speaker_id、spatial 的 kit index 引用、createVideos 出向的语义 id 翻译全部不断链。仅 AI 未规划出的角色走补建（新建 kit，分配新 index / ai_kit_id，需避开已有 index）。
+
+---
+
 ## 2. 档位 1：AI 生成 kit（现状档）
 
 | 项 | 说明 |
@@ -118,6 +142,7 @@ scene_script ──(匹配A: 角色→kit)──> kit ──(匹配B: voice)─�
 | `spatial_units`（SpatialCoverageUnitBo[]） | `querySpatialUnitsByAgentProjectId` | spatialUnitId、environmentKitIndex、cameraAxisRule、actorSlots、masterCoverageShot |
 
 **对 OpenAPI 方案的两条直接推论**：
+
 1. renormalize 的**全部输入都从 DB 组装**（scene scripts / kits / spatial / attributes），没有直接透传请求体的字段 → OpenAPI 走该通道 = 「用户数据先落库（声明建 kit、scene_script 写入），再触发 renormalize」，方案与通道天然契合，无需改 AI 协议。
 2. 我方重建 kit 时只要落好 `ai_kit_id`，出向的 kit 语义 id 翻译（`resolveKitDetail`）自动工作；kit 的 name / visualAppearance / 图（kitSource）/ voiceId 随 payload 全量给 AI，具备按声明对齐的信息基础。
 
