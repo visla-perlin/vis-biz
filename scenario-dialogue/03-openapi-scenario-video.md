@@ -241,3 +241,12 @@ DB 全字段来源矩阵（落库实现在 vcjs `buildSceneScript`，哨兵规�
 | # | 问题 | 倾向 |
 | - | ------ | ------ |
 | C1 | **声明持久化载体**：`agent_project_attributes` JSON（复用现有 JSON 列模式，无 migration）vs 新表 `agent_project_kit_binding`（结构清晰，但双仓 Entity/Mapper + visla-api Flyway） | 一期 attributes JSON（改动最小），量级上来再拆表 |
+
+### 4.4 建议行动（优先级与阻塞关系）
+
+```text
+阻塞一期开发启动：P1（script_locked/ai_align）+ P2（计费口径）—— 拍板即可开发
+不阻塞开发、影响开放范围：P3（场景 4）、P4（coverage 重生成）、P5（切换端点）
+尽早外部排期：A1/A2 发 AI 团队（A1 决定极简直传路径能否开放）
+实施前定即可：C1（声明载体）
+```
