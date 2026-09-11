@@ -101,10 +101,37 @@ scene_script ──(匹配A: 角色→kit)──> kit ──(匹配B: voice)─�
 | 用户未声明的剧本角色 | AI 动态生成 + 自动 voice（退化为档位1行为） |
 | createVideos 出向 | scene script → 反查 `ai_kit_id`（我方分配的语义 id）→ 语义 id 出向，链路自洽 |
 
-### 3.4 风险
+### 3.4 scene_script 用户入参与字段填充矩阵（DB 全字段 × 数据来源）
+
+用户入参无法也不需要覆盖表全部字段。入参模型（每条 scene）：
+
+```json
+{ "sorting": 1, "text": "...", "visual": "...", "scene_text": ["..."],
+  "duration": 8, "characters": ["Alice"], "environment": "Office" }
+```
+
+DB 全字段来源矩阵（落库实现在 vcjs `buildSceneScript`，哨兵规则以此为准）：
+
+| DB 字段 | 约束 | 用户入参（场景 3/4） | AI 回填（renormalize 返回） | 系统 | 映射规则 |
+| ------ | ---- | ------ | ------ | ------ | ------ |
+| `sorting` | NOT NULL | **必传**（或由数组顺序推导） | scene_index | | `scene_index + 1`，缺省 1 |
+| `audio_script` | varchar 2000 | **text：核心字段**（与 visual 至少其一非空） | audio_script | | 直传，2000 截断 |
+| `visual` | varchar 2000 | 可选 | visual | | 直传，2000 截断 |
+| `scene_text` | json | 可选（`List<String>`） | scene_text | | List → JSON，空则 null |
+| `duration` | double 可空 | 可选 | duration | | 直传；未传由 AI 规划，仍空则生成端自定 |
+| `speaker_id` | kit 主键 | characters：声明 name（**强引用**，创建时校验存在） | speaker_kit_id | | kitsVoMap 映射；未命中 → **-1**（voiceover 哨兵）；speaker 空且 text 空 → **null**（纯视觉场） |
+| `ref_image_kit_id` | kit 主键 | environment：声明 name（强引用） | coverage_shot_id / environment_kit_id | | kitsVoMap 映射，未命中 → **-1**；AI spatial 锚定会改写此字段 |
+| `status` | 默认 0 | | | **ACTIVE** | 系统固定 |
+| `id` / `agent_project_id` / `created_at` / `modified_at` | | | | **系统生成** | |
+| （`visible_kit_indexes`） | 表无对应列 | 不传 | AI 返回但不落库 | 出向时按 kit 关系组装 | 仅 createVideos 出向协议字段 |
+
+**用户字段与 AI 回填的关系**（关键）：走 renormalize 的分支（2a/3/4-ai_align）不存在「用户字段 + AI 字段合并」——用户 scene_script 是 renormalize 的**输入**，落库的是 AI 返回的**整条重排结果**（text 可能被微调、ref_image_kit_id 会被 spatial 锚定改写）。要逐字保留走 `script_locked` 本地直落：用户字段直接落库、AI 不回填，duration/visual 留空由生成端自定。分支 2a 的 characters 是**弱引用**（自由角色名，AI 在 renormalize 时对齐到 AI kit），不做创建时校验。
+
+### 3.5 风险
 
 | 风险 | 缓解 |
 | ---- | ---- |
+| 场景 3/4 的 scene_script 仅传 text+sorting 时，renormalize 后 visual/duration 全由 AI 补，用户预期可能偏差 | 文档明示：用户字段是重排输入而非最终值；逐字/字段级控制诉求走 script_locked 本地直落 |
 | 2a 的 AI name 匹配质量（角色名泛化/别名） | 文档要求声明 name 使用剧中角色名；结构化返回可审计；错配走补建不静默 |
 | 用户 environment 图与 AI coverage/spatial 规划的整合 | renormalize payload 含 spatialUnits；联调验证覆盖质量，不行则 environment 场景降级 `spatial_mode=none` |
 | 声明 media 图片规格与 AI 产物差异 | 复用 `add-uploaded-kit` 已验证的资产标准化处理链 |
